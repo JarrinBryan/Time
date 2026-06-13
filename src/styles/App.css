@@ -1,0 +1,19 @@
+.app {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.pomodoro-card {
+  width: 450px;
+  padding: 2rem;
+  border-radius: 20px;
+  background: #1e293b;
+  box-shadow: 0 0 30px rgba(0,0,0,0.3);
+}
+
+.pomodoro-card h1 {
+  text-align: center;
+  margin: 0;
+}
