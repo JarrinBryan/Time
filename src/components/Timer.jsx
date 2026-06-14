@@ -34,7 +34,13 @@ function Timer() {
       <h2 className="timer-mode">
         {isRunning ? "Enfoque" : "Listo para comenzar"}
       </h2>
+      <p className="session-type">
+  Sesión de trabajo
+</p>
 
+<p className="pomodoro-count">
+  Pomodoros completados: 0
+</p>
       <div className="timer-display">
         {formatTime(time)}
       </div>

@@ -1,0 +1,40 @@
+.timer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: 2rem;
+}
+
+.timer-mode {
+  color: #94a3b8;
+  margin-bottom: 1rem;
+}
+
+.timer-display {
+  font-size: 5rem;
+  font-weight: bold;
+  letter-spacing: 4px;
+}
+.session-type {
+  color: #38bdf8;
+  font-size: 1.1rem;
+  margin-top: 10px;
+}
+
+.pomodoro-count {
+  color: #94a3b8;
+  font-size: 0.9rem;
+  margin-bottom: 25px;
+}
+
+.controls button {
+  padding: 12px 22px;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: 600;
+  background: #38bdf8;
+  color: white;
+  transition: all 0.3s ease;
+}
