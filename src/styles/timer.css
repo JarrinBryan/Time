@@ -38,3 +38,10 @@
   color: white;
   transition: all 0.3s ease;
 }
+.controls button:hover {
+  transform: translateY(-3px);
+}
+
+.controls button:active {
+  transform: scale(0.97);
+}
