@@ -99,8 +99,3 @@
   from { opacity: 0; }
   to   { opacity: 1; }
 }
-
-body {
-  background-color: #0f172a !important;
-  color: #f1f5f9 !important;
-}
