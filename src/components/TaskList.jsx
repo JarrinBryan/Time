@@ -15,9 +15,9 @@ function getNowStr() {
 }
 
 function getWeekDates() {
-  const today = new Date()
-  const dow   = today.getDay()
-  const diff  = dow === 0 ? -6 : 1 - dow
+  const today  = new Date()
+  const dow    = today.getDay()
+  const diff   = dow === 0 ? -6 : 1 - dow
   const monday = new Date(today)
   monday.setDate(today.getDate() + diff)
   return Array.from({ length: 5 }, (_, i) => {
@@ -34,16 +34,16 @@ const PRIORITY = {
 }
 
 const DURATIONS = [
-  { label:'30m', value:30  },
-  { label:'1h',  value:60  },
-  { label:'1.5h',value:90  },
-  { label:'2h',  value:120 },
-  { label:'3h',  value:180 },
-  { label:'4h',  value:240 },
+  { label:'30m',  value:30  },
+  { label:'1h',   value:60  },
+  { label:'1.5h', value:90  },
+  { label:'2h',   value:120 },
+  { label:'3h',   value:180 },
+  { label:'4h',   value:240 },
 ]
 
-const DAY_NAMES  = ['Lun','Mar','Mié','Jue','Vie']
-const HOURS      = Array.from({ length: 15 }, (_, i) => i + 7) // 7am–9pm
+const DAY_NAMES = ['Lun','Mar','Mié','Jue','Vie']
+const HOURS     = Array.from({ length: 15 }, (_, i) => i + 7)
 
 function fmtHour(h) {
   return `${String(h).padStart(2,'0')}:00`
@@ -52,38 +52,71 @@ function fmtHour(h) {
 function addMinutes(timeStr, mins) {
   const [h, m] = timeStr.split(':').map(Number)
   const total  = h * 60 + m + mins
-  return `${String(Math.floor(total/60)%24).padStart(2,'0')}:${String(total%60).padStart(2,'0')}`
+  return `${String(Math.floor(total/60) % 24).padStart(2,'0')}:${String(total % 60).padStart(2,'0')}`
 }
 
-export default function TaskList({ onDoneCountChange }) {
-  const [tasks,     setTasks]     = useState([])
-  const [weekDates, setWeekDates] = useState(getWeekDates())
-  const [nowStr,    setNowStr]    = useState(getNowStr())
+/* ── Estilos ── */
+const inputStyle = {
+  width:'100%', background:'var(--surface2)', border:'1px solid var(--border)',
+  borderRadius:'9px', color:'var(--text)', padding:'.55rem .8rem',
+  fontSize:'.84rem', outline:'none', fontFamily:'inherit',
+}
 
-  // Modal estado
-  const [modal, setModal]   = useState(null) // { dayIndex, hour } | null
-  const [input, setInput]   = useState('')
-  const [time,  setTime]    = useState('')
+const labelStyle = {
+  fontSize:'.68rem', color:'var(--text3)', textTransform:'uppercase',
+  letterSpacing:'.07em', fontWeight:700,
+}
+
+const durBtnStyle = (active) => ({
+  padding:'.35rem .6rem', border:'1px solid',
+  borderColor: active ? 'var(--accent)' : 'var(--border)',
+  background:  active ? 'rgba(99,102,241,0.18)' : 'var(--surface2)',
+  color:       active ? 'var(--accent)' : 'var(--text3)',
+  borderRadius:'8px', fontSize:'.75rem', fontWeight:700,
+  cursor:'pointer', fontFamily:'inherit', transition:'all .2s',
+})
+
+/* ── Componente principal ── */
+export default function TaskList({ onDoneCountChange, onTasksChange, externalTasks }) {
+  const [tasks,     setTasks]     = useState(externalTasks || [])
+  const [weekDates]               = useState(getWeekDates())
+  const [nowStr,    setNowStr]    = useState(getNowStr())
+  const [hovered,   setHovered]   = useState(null)
+
+  // Modal
+  const [modal,    setModal]    = useState(null)
+  const [input,    setInput]    = useState('')
+  const [time,     setTime]     = useState('')
   const [duration, setDuration] = useState(60)
   const [priority, setPriority] = useState('medium')
 
-  // Tooltip hover
-  const [hovered, setHovered] = useState(null)
-
+  // Reloj
   useEffect(() => {
     const t = setInterval(() => setNowStr(getNowStr()), 30000)
     return () => clearInterval(t)
   }, [])
 
+  // Cargar desde localStorage solo al montar
   useEffect(() => {
-    try { setTasks(JSON.parse(localStorage.getItem('ff_tasks') || '[]')) } catch(e) {}
+    try {
+      const saved = JSON.parse(localStorage.getItem('ff_tasks') || '[]')
+      setTasks(saved)
+    } catch(e) {}
   }, [])
+
+  // Sincronizar si App.jsx actualiza externalTasks
+  useEffect(() => {
+    if (externalTasks && externalTasks.length > 0) {
+      setTasks(externalTasks)
+    }
+  }, [externalTasks])
 
   const saveTasks = useCallback((next) => {
     localStorage.setItem('ff_tasks', JSON.stringify(next))
     const today = todayKey()
     onDoneCountChange(next.filter(t => t.date === today && t.done?.includes(today)).length)
-  }, [onDoneCountChange])
+    onTasksChange?.(next)
+  }, [onDoneCountChange, onTasksChange])
 
   const openModal = (dayIndex, hour) => {
     setModal({ dayIndex, hour })
@@ -113,7 +146,7 @@ export default function TaskList({ onDoneCountChange }) {
     const next = tasks.map(t => {
       if (t.id !== id) return t
       const done = t.done || []
-      return { ...t, done: done.includes(dk) ? done.filter(x=>x!==dk) : [...done, dk] }
+      return { ...t, done: done.includes(dk) ? done.filter(x => x !== dk) : [...done, dk] }
     })
     setTasks(next); saveTasks(next)
   }
@@ -127,9 +160,13 @@ export default function TaskList({ onDoneCountChange }) {
   const todayDone = tasks.filter(t => t.date === todayStr && t.done?.includes(todayStr)).length
   const todayAll  = tasks.filter(t => t.date === todayStr).length
 
-  // Tarea activa ahora
-  const activeTasks   = tasks.filter(t => t.date===todayStr && !t.done?.includes(todayStr) && t.time && t.time<=nowStr && t.endTime>nowStr)
-  const currentTask   = activeTasks[0] || null
+  const activeTasks = tasks.filter(t =>
+    t.date === todayStr &&
+    !t.done?.includes(todayStr) &&
+    t.time && t.time <= nowStr &&
+    t.endTime > nowStr
+  )
+  const currentTask = activeTasks[0] || null
 
   return (
     <div className="card" style={{ flex:1 }}>
@@ -142,8 +179,11 @@ export default function TaskList({ onDoneCountChange }) {
             Haz clic en cualquier hora para añadir una actividad
           </div>
         </div>
-        <div style={{ fontSize:'.78rem', color:'var(--text2)', background:'var(--surface2)',
-          border:'1px solid var(--border)', borderRadius:'20px', padding:'.3rem .85rem', fontWeight:600 }}>
+        <div style={{
+          fontSize:'.78rem', color:'var(--text2)', background:'var(--surface2)',
+          border:'1px solid var(--border)', borderRadius:'20px',
+          padding:'.3rem .85rem', fontWeight:600,
+        }}>
           {todayDone}/{todayAll} hoy
         </div>
       </div>
@@ -158,7 +198,9 @@ export default function TaskList({ onDoneCountChange }) {
           <span style={{ fontSize:'1.1rem' }}>🎯</span>
           <div style={{ flex:1 }}>
             <div style={{ fontSize:'.65rem', color:'var(--accent)', fontWeight:700,
-              textTransform:'uppercase', letterSpacing:'.07em' }}>En progreso ahora</div>
+              textTransform:'uppercase', letterSpacing:'.07em' }}>
+              En progreso ahora
+            </div>
             <div style={{ fontSize:'.85rem', fontWeight:600, color:'var(--text)' }}>
               {currentTask.text}
               <span style={{ color:'var(--text3)', fontWeight:400, fontSize:'.75rem', marginLeft:'.5rem' }}>
@@ -170,7 +212,9 @@ export default function TaskList({ onDoneCountChange }) {
             background:'var(--accent)', color:'#fff', border:'none', borderRadius:'8px',
             padding:'.35rem .75rem', fontSize:'.75rem', fontWeight:700,
             cursor:'pointer', fontFamily:'inherit',
-          }}>✓ Completar</button>
+          }}>
+            ✓ Completar
+          </button>
         </div>
       )}
 
@@ -181,7 +225,7 @@ export default function TaskList({ onDoneCountChange }) {
           {/* CABECERA días */}
           <div style={{
             display:'grid', gridTemplateColumns:'48px repeat(5,1fr)',
-            gap:'3px', marginBottom:'3px', position:'sticky', top:0, zIndex:2,
+            gap:'3px', marginBottom:'3px',
           }}>
             <div/>
             {weekDates.map((d, i) => {
@@ -194,20 +238,20 @@ export default function TaskList({ onDoneCountChange }) {
                   textAlign:'center', padding:'.45rem .2rem',
                   background: isToday ? 'rgba(99,102,241,0.18)' : 'var(--surface2)',
                   borderRadius:'10px',
-                  border:`1px solid ${isToday?'rgba(99,102,241,0.5)':'var(--border)'}`,
+                  border:`1px solid ${isToday ? 'rgba(99,102,241,0.5)' : 'var(--border)'}`,
                 }}>
                   <div style={{ fontSize:'.68rem', fontWeight:700,
-                    color: isToday?'var(--accent)':'var(--text3)',
+                    color: isToday ? 'var(--accent)' : 'var(--text3)',
                     textTransform:'uppercase', letterSpacing:'.05em' }}>
                     {DAY_NAMES[i]}
                   </div>
                   <div style={{ fontSize:'.9rem', fontWeight:800,
-                    color: isToday?'var(--accent)':'var(--text)', lineHeight:1 }}>
+                    color: isToday ? 'var(--accent)' : 'var(--text)', lineHeight:1 }}>
                     {d.getDate()}
                   </div>
                   {dayAll > 0 && (
-                    <div style={{ fontSize:'.58rem', color: dayDone===dayAll?'var(--green)':'var(--text3)',
-                      marginTop:'.1rem', fontWeight:600 }}>
+                    <div style={{ fontSize:'.58rem', fontWeight:600, marginTop:'.1rem',
+                      color: dayDone===dayAll ? 'var(--green)' : 'var(--text3)' }}>
                       {dayDone}/{dayAll}
                     </div>
                   )}
@@ -219,7 +263,7 @@ export default function TaskList({ onDoneCountChange }) {
           {/* GRID horas */}
           <div style={{ maxHeight:'420px', overflowY:'auto', paddingRight:'2px' }}>
             {HOURS.map(hour => {
-              const hourStr = fmtHour(hour)
+              const hourStr   = fmtHour(hour)
               const isNowHour = parseInt(nowStr.split(':')[0]) === hour
               return (
                 <div key={hour} style={{
@@ -230,13 +274,17 @@ export default function TaskList({ onDoneCountChange }) {
                 }}>
                   {/* Etiqueta hora */}
                   <div style={{
-                    fontSize:'.65rem', color: isNowHour?'var(--accent)':'var(--text3)',
-                    fontWeight: isNowHour?700:500,
-                    display:'flex', alignItems:'center', justifyContent:'flex-end',
-                    paddingRight:'8px', paddingTop:'6px', flexShrink:0,
+                    fontSize:'.65rem',
+                    color: isNowHour ? 'var(--accent)' : 'var(--text3)',
+                    fontWeight: isNowHour ? 700 : 500,
+                    display:'flex', alignItems:'center',
+                    justifyContent:'flex-end', paddingRight:'8px',
+                    paddingTop:'6px', flexShrink:0,
                   }}>
                     {hourStr}
-                    {isNowHour && <span style={{ marginLeft:'2px', color:'var(--accent)' }}>●</span>}
+                    {isNowHour && (
+                      <span style={{ marginLeft:'2px', color:'var(--accent)' }}>●</span>
+                    )}
                   </div>
 
                   {/* Celdas por día */}
@@ -252,31 +300,35 @@ export default function TaskList({ onDoneCountChange }) {
                     return (
                       <div key={di}
                         onClick={() => cellTasks.length === 0 && openModal(di, hour)}
+                        onMouseEnter={e => {
+                          if (cellTasks.length === 0)
+                            e.currentTarget.style.background = isToday ? 'rgba(99,102,241,0.12)' : 'var(--surface3)'
+                        }}
+                        onMouseLeave={e => {
+                          if (cellTasks.length === 0)
+                            e.currentTarget.style.background = isToday ? 'rgba(99,102,241,0.05)' : 'var(--surface2)'
+                        }}
                         style={{
                           minHeight:'42px', borderRadius:'7px', padding:'3px',
                           background: isToday ? 'rgba(99,102,241,0.05)' : 'var(--surface2)',
-                          border:`1px solid ${isToday?'rgba(99,102,241,0.15)':'var(--border)'}`,
-                          cursor: cellTasks.length===0 ? 'pointer' : 'default',
-                          transition:'background .15s',
-                          position:'relative',
+                          border:`1px solid ${isToday ? 'rgba(99,102,241,0.15)' : 'var(--border)'}`,
+                          cursor: cellTasks.length === 0 ? 'pointer' : 'default',
+                          transition:'background .15s', position:'relative',
                         }}
-                        onMouseEnter={e => { if(cellTasks.length===0) e.currentTarget.style.background = isToday?'rgba(99,102,241,0.12)':'var(--surface3)' }}
-                        onMouseLeave={e => { if(cellTasks.length===0) e.currentTarget.style.background = isToday?'rgba(99,102,241,0.05)':'var(--surface2)' }}
                       >
+                        {/* Hint "+" en celda vacía */}
                         {cellTasks.length === 0 && (
                           <div style={{
                             position:'absolute', inset:0, display:'flex',
                             alignItems:'center', justifyContent:'center',
-                            opacity:0, transition:'opacity .15s',
-                            fontSize:'.7rem', color:'var(--text3)',
+                            fontSize:'.85rem', color:'var(--text3)', opacity:0,
+                            transition:'opacity .15s', pointerEvents:'none',
                           }}
-                            onMouseEnter={e => e.currentTarget.style.opacity='1'}
-                            onMouseLeave={e => e.currentTarget.style.opacity='0'}
-                          >
-                            +
-                          </div>
+                            className="cell-hint"
+                          >+</div>
                         )}
 
+                        {/* Tareas en celda */}
                         {cellTasks.map(task => {
                           const isDone = task.done?.includes(dk)
                           const p      = PRIORITY[task.priority || 'medium']
@@ -285,29 +337,28 @@ export default function TaskList({ onDoneCountChange }) {
                             <div key={task.id}
                               onMouseEnter={() => setHovered(task.id)}
                               onMouseLeave={() => setHovered(null)}
+                              onClick={e => { e.stopPropagation(); toggleDone(task.id, dk) }}
                               style={{
                                 background: isDone ? 'rgba(16,185,129,0.15)' : p.bg,
-                                border:`1px solid ${isDone?'#10b98144':p.color+'55'}`,
-                                borderLeft:`3px solid ${isDone?'var(--green)':p.color}`,
+                                border:`1px solid ${isDone ? '#10b98144' : p.color+'55'}`,
+                                borderLeft:`3px solid ${isDone ? 'var(--green)' : p.color}`,
                                 borderRadius:'5px', padding:'4px 6px',
-                                cursor:'pointer', transition:'all .15s',
+                                cursor:'pointer', transition:'all .15s', position:'relative',
                                 transform: isHov ? 'scale(1.02)' : 'scale(1)',
-                                position:'relative',
+                                marginBottom:'2px',
                               }}
-                              onClick={(e) => { e.stopPropagation(); toggleDone(task.id, dk) }}
                             >
                               <div style={{
                                 fontSize:'.68rem', fontWeight:700, lineHeight:1.25,
-                                color: isDone?'var(--green)':p.color,
-                                textDecoration: isDone?'line-through':'none',
+                                color: isDone ? 'var(--green)' : p.color,
+                                textDecoration: isDone ? 'line-through' : 'none',
                                 whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
-                                maxWidth:'100%',
                               }}>
                                 {isDone ? '✓ ' : ''}{task.text}
                               </div>
                               <div style={{ fontSize:'.58rem', color:'var(--text3)', marginTop:'1px' }}>
                                 {task.time}–{task.endTime}
-                                {' · '}{task.duration>=60?`${task.duration/60}h`:`${task.duration}m`}
+                                {' · '}{task.duration >= 60 ? `${task.duration/60}h` : `${task.duration}m`}
                               </div>
                               {isHov && (
                                 <button
@@ -318,7 +369,9 @@ export default function TaskList({ onDoneCountChange }) {
                                     borderRadius:'4px', color:'#ef4444',
                                     cursor:'pointer', padding:'1px 5px',
                                     fontSize:'.62rem', fontWeight:700, lineHeight:1.4,
-                                  }}>✕</button>
+                                  }}>
+                                  ✕
+                                </button>
                               )}
                             </div>
                           )
@@ -333,20 +386,22 @@ export default function TaskList({ onDoneCountChange }) {
         </div>
       </div>
 
-      {/* MODAL AÑADIR TAREA */}
+      {/* MODAL AÑADIR ACTIVIDAD */}
       {modal !== null && (
-        <div style={{
-          position:'fixed', inset:0, background:'rgba(0,0,0,0.75)',
-          display:'flex', alignItems:'center', justifyContent:'center', zIndex:300,
-        }}
+        <div
           onClick={closeModal}
-        >
-          <div style={{
-            background:'var(--surface)', border:'1px solid var(--border)',
-            borderRadius:'20px', padding:'1.75rem', width:'360px', maxWidth:'95vw',
-            boxShadow:'0 24px 60px rgba(0,0,0,0.5)',
+          style={{
+            position:'fixed', inset:0, background:'rgba(0,0,0,0.75)',
+            display:'flex', alignItems:'center', justifyContent:'center', zIndex:300,
           }}
+        >
+          <div
             onClick={e => e.stopPropagation()}
+            style={{
+              background:'var(--surface)', border:'1px solid var(--border)',
+              borderRadius:'20px', padding:'1.75rem', width:'360px', maxWidth:'95vw',
+              boxShadow:'0 24px 60px rgba(0,0,0,0.5)',
+            }}
           >
             {/* Header modal */}
             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'1.25rem' }}>
@@ -368,19 +423,26 @@ export default function TaskList({ onDoneCountChange }) {
             {/* Nombre */}
             <div style={{ marginBottom:'.85rem' }}>
               <label style={labelStyle}>¿Qué vas a hacer?</label>
-              <input autoFocus style={{ ...inputStyle, marginTop:'.3rem' }}
+              <input
+                autoFocus
+                style={{ ...inputStyle, marginTop:'.3rem' }}
                 placeholder="Ej: Estudiar React, Ejercicio..."
-                maxLength={60} value={input}
+                maxLength={60}
+                value={input}
                 onChange={e => setInput(e.target.value)}
-                onKeyDown={e => e.key==='Enter' && addTask()}
+                onKeyDown={e => e.key === 'Enter' && addTask()}
               />
             </div>
 
             {/* Hora */}
             <div style={{ marginBottom:'.85rem' }}>
               <label style={labelStyle}>Hora de inicio</label>
-              <input type="time" value={time} onChange={e => setTime(e.target.value)}
-                style={{ ...inputStyle, marginTop:'.3rem' }}/>
+              <input
+                type="time"
+                value={time}
+                onChange={e => setTime(e.target.value)}
+                style={{ ...inputStyle, marginTop:'.3rem' }}
+              />
             </div>
 
             {/* Duración */}
@@ -389,14 +451,17 @@ export default function TaskList({ onDoneCountChange }) {
               <div style={{ display:'flex', gap:'.35rem', marginTop:'.3rem', flexWrap:'wrap' }}>
                 {DURATIONS.map(d => (
                   <button key={d.value} onClick={() => setDuration(d.value)}
-                    style={durBtnStyle(duration===d.value)}>
+                    style={durBtnStyle(duration === d.value)}>
                     {d.label}
                   </button>
                 ))}
               </div>
               {time && (
                 <div style={{ fontSize:'.7rem', color:'var(--text3)', marginTop:'.4rem' }}>
-                  Termina a las <strong style={{ color:'var(--accent)' }}>{addMinutes(time, duration)}</strong>
+                  Termina a las{' '}
+                  <strong style={{ color:'var(--accent)' }}>
+                    {addMinutes(time, duration)}
+                  </strong>
                 </div>
               )}
             </div>
@@ -427,13 +492,15 @@ export default function TaskList({ onDoneCountChange }) {
                 border:'1px solid var(--border)', borderRadius:'12px',
                 color:'var(--text2)', fontWeight:600, cursor:'pointer',
                 fontSize:'.85rem', fontFamily:'inherit',
-              }}>Cancelar</button>
+              }}>
+                Cancelar
+              </button>
               <button onClick={addTask} disabled={!input.trim()} style={{
                 flex:2, padding:'.65rem',
                 background: input.trim() ? 'var(--accent)' : 'var(--surface3)',
                 border:'none', borderRadius:'12px',
                 color: input.trim() ? '#fff' : 'var(--text3)',
-                fontWeight:700, cursor: input.trim()?'pointer':'default',
+                fontWeight:700, cursor: input.trim() ? 'pointer' : 'default',
                 fontSize:'.85rem', fontFamily:'inherit', transition:'all .2s',
               }}>
                 ✓ Agregar actividad
@@ -445,22 +512,3 @@ export default function TaskList({ onDoneCountChange }) {
     </div>
   )
 }
-
-/* ── Estilos ── */
-const inputStyle = {
-  width:'100%', background:'var(--surface2)', border:'1px solid var(--border)',
-  borderRadius:'9px', color:'var(--text)', padding:'.55rem .8rem',
-  fontSize:'.84rem', outline:'none', fontFamily:'inherit',
-}
-const labelStyle = {
-  fontSize:'.68rem', color:'var(--text3)', textTransform:'uppercase',
-  letterSpacing:'.07em', fontWeight:700,
-}
-const durBtnStyle = (active) => ({
-  padding:'.35rem .6rem', border:'1px solid',
-  borderColor: active ? 'var(--accent)' : 'var(--border)',
-  background:  active ? 'rgba(99,102,241,0.18)' : 'var(--surface2)',
-  color:       active ? 'var(--accent)' : 'var(--text3)',
-  borderRadius:'8px', fontSize:'.75rem', fontWeight:700,
-  cursor:'pointer', fontFamily:'inherit', transition:'all .2s',
-})

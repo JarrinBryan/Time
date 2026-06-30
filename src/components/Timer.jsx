@@ -1,22 +1,32 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import '../styles/Timer.css'
 
-const MODES = {
-  work:  { label: 'Sesión de trabajo', tab: '🎯 Trabajo',  defaultMins: 25 },
-  short: { label: 'Descanso corto',    tab: '☕ Descanso', defaultMins: 5  },
-  long:  { label: 'Descanso largo',    tab: '🛌 Largo',    defaultMins: 15 },
-}
-
-const WORK_DURATIONS  = [15, 20, 25, 30, 45, 60]
-const SHORT_DURATIONS = [5, 10, 15]
-const LONG_DURATIONS  = [15, 20, 30]
-
 const CIRC = 553
 
 function fmt(s) {
   const m  = Math.floor(s / 60)
   const ss = s % 60
   return `${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`
+}
+
+function fmtCountdown(secs) {
+  if (secs <= 0) return null
+  const h = Math.floor(secs / 3600)
+  const m = Math.floor((secs % 3600) / 60)
+  const s = secs % 60
+  if (h > 0) return `${h}h ${String(m).padStart(2,'0')}m`
+  if (m > 0) return `${m}m ${String(s).padStart(2,'0')}s`
+  return `${s}s`
+}
+
+function getNowSecs() {
+  const d = new Date()
+  return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds()
+}
+
+function timeStrToSecs(t) {
+  const [h, m] = t.split(':').map(Number)
+  return h * 3600 + m * 60
 }
 
 function playBell() {
@@ -33,101 +43,135 @@ function playBell() {
   } catch(e) {}
 }
 
-export default function Timer({ onPomComplete, onFocusTick, pomsDone, quote }) {
-  const [mode, setMode]               = useState('work')
-  const [workMins, setWorkMins]       = useState(25)
-  const [shortMins, setShortMins]     = useState(5)
-  const [longMins, setLongMins]       = useState(15)
-  const [remaining, setRemaining]     = useState(25 * 60)
-  const [totalSecs, setTotalSecs]     = useState(25 * 60)
-  const [running, setRunning]         = useState(false)
-  const [focusOpen, setFocusOpen]     = useState(false)
+function todayKey() {
+  const d = new Date()
+  return `${d.getFullYear()}-${d.getMonth()+1}-${d.getDate()}`
+}
+
+export default function Timer({ onPomComplete, onFocusTick, pomsDone, quote, tasks, onTaskComplete }) {
+  const [remaining,     setRemaining]     = useState(0)
+  const [totalSecs,     setTotalSecs]     = useState(0)
+  const [running,       setRunning]       = useState(false)
+  const [focusOpen,     setFocusOpen]     = useState(false)
   const [ambientActive, setAmbientActive] = useState(null)
-  const [showConfirm, setShowConfirm]     = useState(false)
-  const [showSettings, setShowSettings]   = useState(false)
+  const [phase,         setPhase]         = useState('idle')   // 'idle'|'waiting'|'active'|'done'
+  const [activeTask,    setActiveTask]    = useState(null)
+  const [nextTask,      setNextTask]      = useState(null)
+  const [countdown,     setCountdown]     = useState(null)     // segundos hasta la próxima
+  const [showReview,    setShowReview]    = useState(false)
+  const [reviewTask,    setReviewTask]    = useState(null)
 
-  const intervalRef   = useRef(null)
-  const ambientRef    = useRef(null)
-  const modeRef       = useRef(mode)
-  const pomsDoneRef   = useRef(pomsDone)
-  modeRef.current     = mode
-  pomsDoneRef.current = pomsDone
+  const intervalRef  = useRef(null)
+  const ambientRef   = useRef(null)
+  const phaseRef     = useRef(phase)
+  const activeRef    = useRef(activeTask)
+  phaseRef.current   = phase
+  activeRef.current  = activeTask
 
-  // Cargar preferencias guardadas
-  useEffect(() => {
-    const savedWork  = parseInt(localStorage.getItem('ff_work_mins')  || '25')
-    const savedShort = parseInt(localStorage.getItem('ff_short_mins') || '5')
-    const savedLong  = parseInt(localStorage.getItem('ff_long_mins')  || '15')
-    setWorkMins(savedWork)
-    setShortMins(savedShort)
-    setLongMins(savedLong)
-    setTotalSecs(savedWork * 60)
-    setRemaining(savedWork * 60)
-  }, [])
+  // ── Detectar tarea activa del calendario ──────────────────────
+  const syncWithCalendar = useCallback(() => {
+    const now    = getNowSecs()
+    const today  = todayKey()
+    const todays = (tasks || []).filter(t => t.date === today && t.time && t.endTime)
 
-  useEffect(() => {
-    document.title = running ? `${fmt(remaining)} — FocusFlow` : 'FocusFlow'
-  }, [remaining, running])
+    // ¿Hay una tarea activa AHORA?
+    const current = todays.find(t => {
+      const start = timeStrToSecs(t.time)
+      const end   = timeStrToSecs(t.endTime)
+      return now >= start && now < end && !t.done?.includes(today)
+    })
 
-  const getMins = useCallback((m) => {
-    if (m === 'work')  return workMins
-    if (m === 'short') return shortMins
-    return longMins
-  }, [workMins, shortMins, longMins])
-
-  const applyMode = useCallback((m, customMins) => {
-    const mins = customMins ?? getMins(m)
-    const secs = mins * 60
-    setMode(m); setTotalSecs(secs); setRemaining(secs)
-    setRunning(false); clearInterval(intervalRef.current)
-  }, [getMins])
-
-  const stopTimer = () => { clearInterval(intervalRef.current); setRunning(false) }
-
-  const startTimer = () => {
-    setRunning(true)
-    intervalRef.current = setInterval(() => {
-      setRemaining(prev => {
-        if (prev <= 1) {
-          clearInterval(intervalRef.current)
-          setRunning(false)
-          playBell()
-          if (modeRef.current === 'work') {
-            setShowConfirm(true)
-          } else {
-            showNotif('✅ ¡Descanso terminado! Listo para trabajar.')
-            setTimeout(() => applyMode('work'), 300)
+    if (current) {
+      // Activar inmediatamente
+      const end     = timeStrToSecs(current.endTime)
+      const left    = end - now
+      setActiveTask(current)
+      setNextTask(null)
+      setCountdown(null)
+      setPhase('active')
+      setTotalSecs(left)
+      setRemaining(left)
+      setRunning(true)
+      clearInterval(intervalRef.current)
+      intervalRef.current = setInterval(() => {
+        setRemaining(prev => {
+          if (prev <= 1) {
+            clearInterval(intervalRef.current)
+            setRunning(false)
+            playBell()
+            setPhase('done')
+            setShowReview(true)
+            setReviewTask(activeRef.current)
+            return 0
           }
+          onFocusTick()
+          return prev - 1
+        })
+      }, 1000)
+      return
+    }
+
+    // ¿Hay una próxima tarea hoy?
+    const upcoming = todays
+      .filter(t => timeStrToSecs(t.time) > now && !t.done?.includes(today))
+      .sort((a,b) => timeStrToSecs(a.time) - timeStrToSecs(b.time))[0]
+
+    if (upcoming) {
+      const secsUntil = timeStrToSecs(upcoming.time) - now
+      setNextTask(upcoming)
+      setActiveTask(null)
+      setCountdown(secsUntil)
+      setPhase('waiting')
+      setRunning(false)
+      clearInterval(intervalRef.current)
+      return
+    }
+
+    // Sin tareas
+    if (phaseRef.current !== 'done') {
+      setPhase('idle')
+      setActiveTask(null)
+      setNextTask(null)
+      setCountdown(null)
+      setRunning(false)
+      clearInterval(intervalRef.current)
+    }
+  }, [tasks, onFocusTick])
+
+  // Sincronizar cada 10 segundos
+  useEffect(() => {
+    syncWithCalendar()
+    const t = setInterval(syncWithCalendar, 10000)
+    return () => clearInterval(t)
+  }, [syncWithCalendar])
+
+  // Countdown regresivo hasta próxima actividad
+  useEffect(() => {
+    if (phase !== 'waiting') return
+    const t = setInterval(() => {
+      setCountdown(prev => {
+        if (prev === null) return null
+        if (prev <= 1) {
+          clearInterval(t)
+          syncWithCalendar()
           return 0
         }
-        if (modeRef.current === 'work') onFocusTick()
         return prev - 1
       })
     }, 1000)
-  }
+    return () => clearInterval(t)
+  }, [phase, syncWithCalendar])
 
-  const handleConfirm = (completed) => {
-    setShowConfirm(false)
-    onPomComplete(completed)
-    const poms = pomsDoneRef.current + 1
-    const nm   = poms % 4 === 0 ? 'long' : 'short'
-    showNotif(completed
-      ? '🍅 ¡Pomodoro completado! Tómate un descanso.'
-      : '📝 Pomodoro registrado. ¡Sigue adelante!')
-    setTimeout(() => applyMode(nm), 300)
-  }
+  // Título de pestaña
+  useEffect(() => {
+    if (running && activeTask) {
+      document.title = `${fmt(remaining)} — ${activeTask.text}`
+    } else {
+      document.title = 'FocusFlow'
+    }
+  }, [remaining, running, activeTask])
 
-  const handleSetDuration = (m, mins) => {
-    if (m === 'work')  { setWorkMins(mins);  localStorage.setItem('ff_work_mins',  mins) }
-    if (m === 'short') { setShortMins(mins); localStorage.setItem('ff_short_mins', mins) }
-    if (m === 'long')  { setLongMins(mins);  localStorage.setItem('ff_long_mins',  mins) }
-    if (m === mode && !running) applyMode(m, mins)
-  }
-
-  const toggleTimer      = () => running ? stopTimer() : startTimer()
-  const resetTimer       = () => { stopTimer(); setRemaining(totalSecs) }
-  const handleModeChange = (m) => { if (!running) applyMode(m) }
-
+  // Ambient
   const toggleAmbient = (type) => {
     if (ambientRef.current) { try { ambientRef.current.close() } catch(e) {} ambientRef.current = null }
     if (ambientActive === type) { setAmbientActive(null); return }
@@ -152,110 +196,145 @@ export default function Timer({ onPomComplete, onFocusTick, pomsDone, quote }) {
     if (ambientRef.current) try { ambientRef.current.close() } catch(e) {}
   }, [])
 
-  const offset  = CIRC * (1 - remaining / totalSecs)
-  const pomDots = Array.from({ length: 8 }, (_, i) => ({
-    done: i < pomsDone, current: i === pomsDone && running,
-  }))
+  const handleReview = (completed) => {
+    setShowReview(false)
+    if (reviewTask) {
+      onTaskComplete(reviewTask.id, reviewTask.date, completed)
+      onPomComplete(completed)
+    }
+    setPhase('idle')
+    setActiveTask(null)
+    setReviewTask(null)
+    setTimeout(syncWithCalendar, 500)
+  }
 
-  const currentDurations = mode === 'work' ? WORK_DURATIONS : mode === 'short' ? SHORT_DURATIONS : LONG_DURATIONS
-  const currentMins      = mode === 'work' ? workMins : mode === 'short' ? shortMins : longMins
+  const pct    = totalSecs > 0 ? remaining / totalSecs : 0
+  const offset = CIRC * (1 - pct)
+
+  // Color del círculo según fase
+  const circleColor = phase === 'active'  ? 'url(#timerGrad)'
+                    : phase === 'waiting' ? '#f59e0b'
+                    : phase === 'done'    ? '#10b981'
+                    : '#334155'
 
   return (
     <>
       <div className="card timer-card">
 
-        {/* TABS */}
-        <div className="mode-tabs">
-          {Object.entries(MODES).map(([key, val]) => (
-            <button key={key}
-              className={`mode-tab ${mode === key ? 'active' : ''}`}
-              onClick={() => handleModeChange(key)}
-              title={
-                key==='work'  ? '25 min de trabajo enfocado' :
-                key==='short' ? '5 min entre pomodoros' :
-                                '15 min tras 4 pomodoros'
-              }
-            >{val.tab}</button>
-          ))}
-        </div>
-
-        {/* SELECTOR DE DURACIÓN */}
-        <div style={{ marginBottom:'1rem' }}>
-          <div style={{
-            fontSize:'.65rem', color:'var(--text3)', textTransform:'uppercase',
-            letterSpacing:'.08em', fontWeight:600, marginBottom:'.4rem', textAlign:'center',
-          }}>
-            Duración de sesión
+        {/* ── FASE: IDLE ── */}
+        {phase === 'idle' && (
+          <div style={{ textAlign:'center', padding:'1rem 0' }}>
+            <div style={{ fontSize:'3rem', marginBottom:'.75rem', opacity:.4 }}>📅</div>
+            <div style={{ fontSize:'.95rem', fontWeight:700, color:'var(--text)', marginBottom:'.4rem' }}>
+              Sin actividades programadas
+            </div>
+            <div style={{ fontSize:'.8rem', color:'var(--text3)', lineHeight:1.5 }}>
+              Añade actividades en el calendario<br/>y el timer se activará automáticamente
+            </div>
           </div>
-          <div style={{ display:'flex', gap:'.35rem', justifyContent:'center', flexWrap:'wrap' }}>
-            {currentDurations.map(mins => (
-              <button key={mins}
-                onClick={() => handleSetDuration(mode, mins)}
-                style={{
-                  padding:'.3rem .6rem',
-                  border:'1px solid',
-                  borderColor: currentMins===mins ? 'var(--accent)' : 'var(--border)',
-                  background:  currentMins===mins ? 'rgba(99,102,241,0.15)' : 'var(--surface2)',
-                  color:       currentMins===mins ? 'var(--accent)' : 'var(--text3)',
-                  borderRadius:'8px', fontSize:'.75rem', fontWeight:600,
-                  cursor: running ? 'not-allowed' : 'pointer',
-                  fontFamily:'inherit', transition:'all .2s',
-                  opacity: running ? 0.5 : 1,
-                }}
-                disabled={running}
-              >
-                {mins}m
-              </button>
-            ))}
+        )}
+
+        {/* ── FASE: WAITING ── */}
+        {phase === 'waiting' && nextTask && (
+          <div style={{ textAlign:'center' }}>
+            <div style={{ fontSize:'.68rem', color:'var(--amber)', fontWeight:700,
+              textTransform:'uppercase', letterSpacing:'.1em', marginBottom:'.6rem' }}>
+              ⏳ Próxima actividad
+            </div>
+
+            <div style={{ background:'var(--surface2)', border:'1px solid var(--border)',
+              borderRadius:'14px', padding:'1rem', marginBottom:'1.25rem' }}>
+              <div style={{ fontSize:'1rem', fontWeight:700, color:'var(--text)', marginBottom:'.3rem' }}>
+                {nextTask.text}
+              </div>
+              <div style={{ fontSize:'.8rem', color:'var(--text2)' }}>
+                🕐 {nextTask.time} – {nextTask.endTime}
+                <span style={{ marginLeft:'.5rem', color:'var(--text3)' }}>
+                  ({nextTask.duration >= 60 ? `${nextTask.duration/60}h` : `${nextTask.duration}m`})
+                </span>
+              </div>
+            </div>
+
+            {/* Círculo cuenta atrás */}
+            <div className="circle-wrap" style={{ marginBottom:'1rem' }}>
+              <svg className="timer-circle" width="200" height="200" viewBox="0 0 200 200">
+                <circle className="circle-bg" cx="100" cy="100" r="88"/>
+                <circle className="circle-progress" cx="100" cy="100" r="88"
+                  stroke="#f59e0b" strokeDasharray={CIRC} strokeDashoffset={CIRC * 0.7}
+                  style={{ transition:'none' }}/>
+              </svg>
+              <div className="timer-display">
+                <div className="timer-time" style={{ fontSize:'2rem', color:'var(--amber)' }}>
+                  {countdown !== null ? fmtCountdown(countdown) : '--:--'}
+                </div>
+                <div className="timer-session-label">para comenzar</div>
+              </div>
+            </div>
           </div>
-        </div>
+        )}
 
-        {/* CIRCLE */}
-        <div className="circle-wrap">
-          <svg className="timer-circle" width="200" height="200" viewBox="0 0 200 200">
-            <defs>
-              <linearGradient id="timerGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stopColor="#6366f1"/>
-                <stop offset="100%" stopColor="#a78bfa"/>
-              </linearGradient>
-            </defs>
-            <circle className="circle-bg" cx="100" cy="100" r="88"/>
-            <circle className="circle-progress" cx="100" cy="100" r="88"
-              strokeDasharray={CIRC} strokeDashoffset={offset}/>
-          </svg>
-          <div className="timer-display">
-            <div className="timer-time">{fmt(remaining)}</div>
-            <div className="timer-session-label">{MODES[mode].label}</div>
+        {/* ── FASE: ACTIVE ── */}
+        {phase === 'active' && activeTask && (
+          <>
+            <div style={{ background:'rgba(99,102,241,0.1)', border:'1px solid rgba(99,102,241,0.3)',
+              borderRadius:'12px', padding:'.7rem 1rem', marginBottom:'1rem', textAlign:'center' }}>
+              <div style={{ fontSize:'.65rem', color:'var(--accent)', fontWeight:700,
+                textTransform:'uppercase', letterSpacing:'.08em', marginBottom:'.2rem' }}>
+                🎯 En curso ahora
+              </div>
+              <div style={{ fontSize:'.95rem', fontWeight:700, color:'var(--text)' }}>
+                {activeTask.text}
+              </div>
+              <div style={{ fontSize:'.75rem', color:'var(--text3)', marginTop:'.15rem' }}>
+                {activeTask.time} – {activeTask.endTime}
+              </div>
+            </div>
+
+            <div className="circle-wrap">
+              <svg className="timer-circle" width="200" height="200" viewBox="0 0 200 200">
+                <defs>
+                  <linearGradient id="timerGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="#6366f1"/>
+                    <stop offset="100%" stopColor="#a78bfa"/>
+                  </linearGradient>
+                </defs>
+                <circle className="circle-bg" cx="100" cy="100" r="88"/>
+                <circle className="circle-progress" cx="100" cy="100" r="88"
+                  stroke={circleColor} strokeDasharray={CIRC} strokeDashoffset={offset}/>
+              </svg>
+              <div className="timer-display">
+                <div className="timer-time">{fmt(remaining)}</div>
+                <div className="timer-session-label">restantes</div>
+              </div>
+            </div>
+
+            <div className="pomodoro-count">
+              {Array.from({length:8},(_,i)=>i).map(i => (
+                <div key={i} className={`pom-dot ${i<pomsDone?'done':''} ${i===pomsDone&&running?'current':''}`}/>
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* ── FASE: DONE ── */}
+        {phase === 'done' && (
+          <div style={{ textAlign:'center', padding:'.5rem 0' }}>
+            <div style={{ fontSize:'2.5rem', marginBottom:'.5rem' }}>🎉</div>
+            <div style={{ fontSize:'1rem', fontWeight:700, color:'var(--green)', marginBottom:'.3rem' }}>
+              ¡Actividad finalizada!
+            </div>
+            <div style={{ fontSize:'.8rem', color:'var(--text3)' }}>
+              La ventana de evaluación se abrió
+            </div>
           </div>
-        </div>
+        )}
 
-        {/* DOTS */}
-        <div className="pomodoro-count">
-          {pomDots.map((d, i) => (
-            <div key={i} className={`pom-dot ${d.done?'done':''} ${d.current?'current':''}`}/>
-          ))}
-        </div>
-
-        {/* CONTROLS */}
-        <div className="timer-controls">
-          <button className="btn btn-icon" onClick={resetTimer} title="Reiniciar">↺</button>
-          <button className="btn btn-primary" onClick={toggleTimer}>
-            {running ? '⏸ Pausar' : '▶ Iniciar'}
-          </button>
-          <button className="btn btn-icon" onClick={() => setFocusOpen(true)} title="Modo enfoque">⛶</button>
-        </div>
-
-        {/* AMBIENT */}
-        <div className="ambient-row">
+        {/* AMBIENT — siempre visible */}
+        <div className="ambient-row" style={{ marginTop: phase==='idle'?'1rem':'.75rem' }}>
           <span className="ambient-label">Ambiente:</span>
-          {[
-            {key:'rain',   label:'🌧 Lluvia'},
-            {key:'cafe',   label:'☕ Café'  },
-            {key:'forest', label:'🌲 Bosque'},
-          ].map(a => (
+          {[{key:'rain',label:'🌧 Lluvia'},{key:'cafe',label:'☕ Café'},{key:'forest',label:'🌲 Bosque'}].map(a => (
             <button key={a.key} className={`amb-btn ${ambientActive===a.key?'active':''}`}
-              onClick={() => toggleAmbient(a.key)}>
-              {a.label}
+              onClick={() => toggleAmbient(a.key)}>{a.label}
             </button>
           ))}
         </div>
@@ -263,40 +342,60 @@ export default function Timer({ onPomComplete, onFocusTick, pomsDone, quote }) {
         <div className="motivational">"{quote}"</div>
       </div>
 
-      {/* POPUP CONFIRMACIÓN */}
-      {showConfirm && (
+      {/* ── MODAL REVISIÓN ── */}
+      {showReview && reviewTask && (
         <div style={{
-          position:'fixed', inset:0, background:'rgba(0,0,0,0.75)',
+          position:'fixed', inset:0, background:'rgba(0,0,0,0.8)',
           display:'flex', alignItems:'center', justifyContent:'center', zIndex:500,
         }}>
           <div style={{
             background:'var(--surface)', border:'1px solid var(--border)',
-            borderRadius:'20px', padding:'2rem', maxWidth:'340px', width:'90%',
-            textAlign:'center', boxShadow:'0 24px 60px rgba(0,0,0,0.5)',
+            borderRadius:'24px', padding:'2rem', maxWidth:'360px', width:'92%',
+            textAlign:'center', boxShadow:'0 32px 80px rgba(0,0,0,0.6)',
           }}>
-            <div style={{ fontSize:'2.5rem', marginBottom:'.75rem' }}>🍅</div>
-            <div style={{ fontSize:'1.1rem', fontWeight:700, marginBottom:'.4rem', color:'var(--text)' }}>
-              ¡Sesión terminada!
+            <div style={{ fontSize:'3rem', marginBottom:'.75rem' }}>⏰</div>
+            <div style={{ fontSize:'1.15rem', fontWeight:800, color:'var(--text)', marginBottom:'.4rem' }}>
+              Tiempo completado
             </div>
-            <div style={{ fontSize:'.85rem', color:'var(--text2)', marginBottom:'1.5rem', lineHeight:1.5 }}>
-              ¿Completaste lo que te propusiste en esta sesión?
+            <div style={{ background:'var(--surface2)', border:'1px solid var(--border)',
+              borderRadius:'12px', padding:'.85rem', margin:'1rem 0' }}>
+              <div style={{ fontSize:'1rem', fontWeight:700, color:'var(--text)', marginBottom:'.25rem' }}>
+                {reviewTask.text}
+              </div>
+              <div style={{ fontSize:'.8rem', color:'var(--text3)' }}>
+                {reviewTask.time} – {reviewTask.endTime} ·{' '}
+                {reviewTask.duration >= 60 ? `${reviewTask.duration/60}h` : `${reviewTask.duration}m`}
+              </div>
             </div>
-            <div style={{ display:'flex', gap:'.75rem' }}>
-              <button onClick={() => handleConfirm(false)} style={{
-                flex:1, padding:'.7rem', background:'var(--surface2)',
-                border:'1px solid var(--border)', borderRadius:'12px',
-                color:'var(--text2)', fontWeight:600, cursor:'pointer',
-                fontSize:'.85rem', fontFamily:'inherit', transition:'all .2s',
+            <div style={{ fontSize:'.88rem', color:'var(--text2)', marginBottom:'1.5rem', lineHeight:1.5 }}>
+              ¿Cómo te fue con esta actividad?
+            </div>
+            <div style={{ display:'flex', flexDirection:'column', gap:'.6rem' }}>
+              <button onClick={() => handleReview(true)} style={{
+                padding:'.8rem', background:'var(--accent)', border:'none',
+                borderRadius:'14px', color:'#fff', fontWeight:700,
+                cursor:'pointer', fontSize:'.9rem', fontFamily:'inherit',
+                transition:'all .2s',
               }}>
-                😅 No del todo
+                ✅ La completé al 100%
               </button>
-              <button onClick={() => handleConfirm(true)} style={{
-                flex:1, padding:'.7rem', background:'var(--accent)',
-                border:'none', borderRadius:'12px', color:'#fff',
-                fontWeight:600, cursor:'pointer', fontSize:'.85rem',
-                fontFamily:'inherit', transition:'all .2s',
+              <button onClick={() => handleReview('partial')} style={{
+                padding:'.8rem', background:'var(--surface2)',
+                border:'1px solid var(--amber)', borderRadius:'14px',
+                color:'var(--amber)', fontWeight:700,
+                cursor:'pointer', fontSize:'.9rem', fontFamily:'inherit',
+                transition:'all .2s',
               }}>
-                ✅ ¡Sí!
+                🟡 La hice parcialmente
+              </button>
+              <button onClick={() => handleReview(false)} style={{
+                padding:'.8rem', background:'var(--surface2)',
+                border:'1px solid var(--border)', borderRadius:'14px',
+                color:'var(--text3)', fontWeight:700,
+                cursor:'pointer', fontSize:'.9rem', fontFamily:'inherit',
+                transition:'all .2s',
+              }}>
+                ❌ No la completé
               </button>
             </div>
           </div>
@@ -307,25 +406,31 @@ export default function Timer({ onPomComplete, onFocusTick, pomsDone, quote }) {
       {focusOpen && (
         <div className="focus-overlay active">
           <div className="focus-mode-label">Modo Enfoque</div>
-          <div className="focus-time">{fmt(remaining)}</div>
-          <div className="focus-task-label">Concentrado en tu trabajo</div>
-          <div className="focus-pom-dots">
-            {pomDots.map((d,i) => (
-              <div key={i} className={`pom-dot ${d.done?'done':''}`}
-                style={{width:'8px',height:'8px'}}/>
-            ))}
+          <div className="focus-time">
+            {phase === 'active' ? fmt(remaining) : countdown !== null ? fmtCountdown(countdown) : '--:--'}
+          </div>
+          <div className="focus-task-label">
+            {phase === 'active' && activeTask ? activeTask.text : 'Esperando actividad...'}
           </div>
           <button className="focus-exit" onClick={() => setFocusOpen(false)}>
             ✕ Salir del modo enfoque
           </button>
         </div>
       )}
+
+      {/* Botón modo enfoque — siempre visible */}
+      {phase === 'active' && (
+        <div style={{ textAlign:'center', marginTop:'.5rem' }}>
+          <button onClick={() => setFocusOpen(true)} style={{
+            background:'transparent', border:'1px solid var(--border)',
+            borderRadius:'8px', color:'var(--text3)', padding:'.35rem .9rem',
+            fontSize:'.75rem', cursor:'pointer', fontFamily:'inherit',
+            transition:'all .2s',
+          }}>
+            ⛶ Modo enfoque
+          </button>
+        </div>
+      )}
     </>
   )
-}
-
-function showNotif(msg) {
-  const n = document.createElement('div')
-  n.className = 'notification'; n.textContent = msg
-  document.body.appendChild(n); setTimeout(() => n.remove(), 3500)
 }
