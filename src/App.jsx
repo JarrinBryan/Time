@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import Timer from './components/Timer'
 import TaskList from './components/TaskList'
 import './styles/global.css'
@@ -26,18 +26,43 @@ function todayKey() {
 function App() {
   const [pomsDone,       setPomsDone]       = useState(0)
   const [focusMinutes,   setFocusMinutes]   = useState(0)
-  const [goalTarget,     setGoalTarget]     = useState(6)
   const [tasksDoneCount, setTasksDoneCount] = useState(0)
-  const [tasks,          setTasks]          = useState([])  // ← compartido
+  const [tasks,          setTasks]          = useState([])
   const [quote] = useState(() => QUOTES[Math.floor(Math.random() * QUOTES.length)])
+
+  // Calcular racha real
+  const [streak, setStreak] = useState(1)
 
   useEffect(() => {
     const key = todayKey()
     setPomsDone(parseInt(localStorage.getItem('ff_poms_' + key) || '0'))
     setFocusMinutes(parseFloat(localStorage.getItem('ff_focus_' + key) || '0'))
-    setGoalTarget(parseInt(localStorage.getItem('ff_goal') || '6'))
-    try { setTasks(JSON.parse(localStorage.getItem('ff_tasks') || '[]')) } catch(e) {}
+    try {
+      const saved = JSON.parse(localStorage.getItem('ff_tasks') || '[]')
+      setTasks(saved)
+      // Contar tareas completadas hoy
+      const done = saved.filter(t => t.date === key && t.done?.includes(key)).length
+      setTasksDoneCount(done)
+    } catch(e) {}
+
+    // Calcular racha
+    calcStreak()
   }, [])
+
+  const calcStreak = () => {
+    try {
+      const heat = JSON.parse(localStorage.getItem('ff_heat') || '{}')
+      let count = 0
+      const today = new Date()
+      for (let i = 0; i < 365; i++) {
+        const d = new Date(today)
+        d.setDate(today.getDate() - i)
+        const k = `${d.getFullYear()}-${d.getMonth()+1}-${d.getDate()}`
+        if (heat[k] && heat[k] > 0) { count++ } else if (i > 0) { break }
+      }
+      setStreak(Math.max(1, count))
+    } catch(e) { setStreak(1) }
+  }
 
   const handlePomComplete = useCallback((completed) => {
     if (!completed) return
@@ -45,8 +70,15 @@ function App() {
     setPomsDone(prev => {
       const next = prev + 1
       localStorage.setItem('ff_poms_' + key, next)
+      // Actualizar heatmap
+      try {
+        const heat = JSON.parse(localStorage.getItem('ff_heat') || '{}')
+        heat[key] = (heat[key] || 0) + 1
+        localStorage.setItem('ff_heat', JSON.stringify(heat))
+      } catch(e) {}
       return next
     })
+    calcStreak()
   }, [])
 
   const handleFocusTick = useCallback(() => {
@@ -57,19 +89,19 @@ function App() {
     })
   }, [])
 
-  // Cuando el Timer confirma que una tarea se completó
-  const handleTaskComplete = useCallback((taskId, dateK, completed) => {
+  // Timer completa una tarea del calendario
+  const handleTaskComplete = useCallback((taskId, dateK, result) => {
     setTasks(prev => {
       const next = prev.map(t => {
         if (t.id !== taskId) return t
         const done = t.done || []
-        if (completed === true || completed === 'partial') {
-          return done.includes(dateK) ? t : { ...t, done: [...done, dateK] }
+        // Solo marcar si dijo que sí o parcialmente
+        if ((result === true || result === 'partial') && !done.includes(dateK)) {
+          return { ...t, done: [...done, dateK] }
         }
-        return t  // no completó, no marcar
+        return t
       })
       localStorage.setItem('ff_tasks', JSON.stringify(next))
-      // Actualizar contador
       const today = todayKey()
       const count = next.filter(t => t.date === today && t.done?.includes(today)).length
       setTasksDoneCount(count)
@@ -77,25 +109,17 @@ function App() {
     })
   }, [])
 
-  // Sincronizar tasks cuando TaskList las actualiza
+  // TaskList notifica cambios de tareas a App
   const handleTasksChange = useCallback((updatedTasks) => {
     setTasks(updatedTasks)
+    const today = todayKey()
+    const count = updatedTasks.filter(t => t.date === today && t.done?.includes(today)).length
+    setTasksDoneCount(count)
   }, [])
-
-  const changeGoal = (delta) => {
-    setGoalTarget(prev => {
-      const next = Math.max(1, Math.min(20, prev + delta))
-      localStorage.setItem('ff_goal', next)
-      return next
-    })
-  }
 
   const now     = new Date()
   const dateStr = `${DAYS[now.getDay()]}, ${now.getDate()} ${MONTHS[now.getMonth()]}`
-  const goalPct = Math.min(100, Math.round(pomsDone / goalTarget * 100))
-
-  // Tareas de hoy para el contador
-  const today      = todayKey()
+  const today   = todayKey()
   const todayTasks = tasks.filter(t => t.date === today)
   const todayDone  = todayTasks.filter(t => t.done?.includes(today)).length
 
@@ -107,7 +131,7 @@ function App() {
           <div className="logo-text">Focus<span>Flow</span></div>
         </div>
         <div className="header-right">
-          <div className="streak-badge">🔥 1 día</div>
+          <div className="streak-badge">🔥 {streak} {streak === 1 ? 'día' : 'días'}</div>
           <div className="date-badge">{dateStr}</div>
         </div>
       </header>
@@ -115,6 +139,8 @@ function App() {
       <div className="main-grid">
         {/* IZQUIERDA */}
         <div className="left-col">
+
+          {/* TIMER — recibe tasks directamente */}
           <Timer
             onPomComplete={handlePomComplete}
             onFocusTick={handleFocusTick}
@@ -124,44 +150,69 @@ function App() {
             tasks={tasks}
           />
 
-          {/* OBJETIVO */}
+          {/* OBJETIVO DEL DÍA */}
           <div className="card">
             <div className="card-title">Objetivo del día</div>
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'.3rem' }}>
-              <span style={{ fontSize:'.82rem', color:'var(--text2)' }}>
-                Actividades completadas hoy
-              </span>
-              <span style={{ fontSize:'.82rem', color:'var(--text2)', fontWeight:700 }}>
-                {todayDone}/{todayTasks.length || goalTarget}
-              </span>
-            </div>
-            <div className="progress-bar">
-              <div className="progress-fill" style={{
-                width: todayTasks.length > 0
-                  ? Math.round(todayDone/todayTasks.length*100)+'%'
-                  : '0%'
-              }}/>
-            </div>
-            {todayTasks.length > 0 && (
-              <div style={{ marginTop:'.6rem', display:'flex', flexDirection:'column', gap:'.3rem' }}>
-                {todayTasks.map(t => {
-                  const isDone = t.done?.includes(today)
-                  return (
-                    <div key={t.id} style={{
-                      display:'flex', alignItems:'center', gap:'.5rem',
-                      fontSize:'.75rem', color: isDone ? 'var(--green)' : 'var(--text3)',
-                    }}>
-                      <span>{isDone ? '✅' : '⬜'}</span>
-                      <span style={{ flex:1, textDecoration: isDone?'line-through':'none' }}>
-                        {t.text}
-                      </span>
-                      <span style={{ color:'var(--text3)', fontSize:'.68rem' }}>
-                        {t.time}
-                      </span>
-                    </div>
-                  )
-                })}
+
+            {todayTasks.length === 0 ? (
+              <div style={{ fontSize:'.8rem', color:'var(--text3)', textAlign:'center',
+                padding:'.75rem 0' }}>
+                Sin actividades para hoy.<br/>
+                <span style={{ fontSize:'.72rem' }}>Añade algo en el calendario →</span>
               </div>
+            ) : (
+              <>
+                {/* Barra de progreso */}
+                <div style={{ display:'flex', justifyContent:'space-between',
+                  alignItems:'center', marginBottom:'.4rem' }}>
+                  <span style={{ fontSize:'.78rem', color:'var(--text2)' }}>
+                    Actividades completadas
+                  </span>
+                  <span style={{ fontSize:'.78rem', fontWeight:700, color:'var(--text2)' }}>
+                    {todayDone}/{todayTasks.length}
+                  </span>
+                </div>
+                <div className="progress-bar" style={{ marginBottom:'.75rem' }}>
+                  <div className="progress-fill" style={{
+                    width: todayTasks.length > 0
+                      ? Math.round(todayDone / todayTasks.length * 100) + '%'
+                      : '0%'
+                  }}/>
+                </div>
+
+                {/* Lista de actividades de hoy */}
+                <div style={{ display:'flex', flexDirection:'column', gap:'.3rem' }}>
+                  {todayTasks
+                    .sort((a,b) => (a.time||'').localeCompare(b.time||''))
+                    .map(t => {
+                      const isDone = t.done?.includes(today)
+                      return (
+                        <div key={t.id} style={{
+                          display:'flex', alignItems:'center', gap:'.5rem',
+                          padding:'.35rem .5rem',
+                          background: isDone ? 'rgba(16,185,129,0.08)' : 'var(--surface2)',
+                          borderRadius:'8px',
+                          border: `1px solid ${isDone ? 'rgba(16,185,129,0.25)' : 'var(--border)'}`,
+                        }}>
+                          <span style={{ fontSize:'.85rem' }}>{isDone ? '✅' : '⬜'}</span>
+                          <span style={{
+                            flex:1, fontSize:'.78rem',
+                            color: isDone ? 'var(--green)' : 'var(--text)',
+                            textDecoration: isDone ? 'line-through' : 'none',
+                          }}>
+                            {t.text}
+                          </span>
+                          {t.time && (
+                            <span style={{ fontSize:'.68rem', color:'var(--text3)',
+                              flexShrink:0 }}>
+                              {t.time}
+                            </span>
+                          )}
+                        </div>
+                      )
+                  })}
+                </div>
+              </>
             )}
           </div>
 
@@ -185,7 +236,7 @@ function App() {
           </div>
         </div>
 
-        {/* DERECHA */}
+        {/* DERECHA — calendario */}
         <div className="right-col">
           <TaskList
             onDoneCountChange={setTasksDoneCount}
